@@ -1,0 +1,18 @@
+{
+	"node": "n8n-nodes-vera.vera",
+	"nodeVersion": "1.0",
+	"codexVersion": "1.0",
+	"categories": ["Data & Storage", "Development"],
+	"resources": {
+		"credentialDocumentation": [
+			{
+				"url": "https://vera.waggle.ae/docs"
+			}
+		],
+		"primaryDocumentation": [
+			{
+				"url": "https://vera.waggle.ae/docs"
+			}
+		]
+	}
+}
