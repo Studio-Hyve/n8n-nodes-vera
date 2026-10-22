@@ -16,6 +16,7 @@ import {
 	isSuccess,
 	mapApiError,
 	parseSuccess,
+	resolveBaseUrl,
 	toHttpOptions,
 	VeraApiError,
 	VeraInputError,
@@ -31,7 +32,7 @@ export class Vera implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description:
-			'Scrape pages, search the web, and extract contacts and products with Vera by Waggle',
+			'Scrape pages, search the web, get search results pages, keyword ideas and AI answers with Vera by Waggle',
 		defaults: { name: 'Vera' },
 		usableAsTool: true,
 		inputs: [NodeConnectionTypes.Main],
@@ -47,16 +48,20 @@ export class Vera implements INodeType {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
 
+		// The API address comes from the credential (production unless it was changed).
+		const credentials = await this.getCredentials('veraApi');
+
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
 				const operation = this.getNodeParameter('operation', itemIndex) as VeraOperation;
+				const baseUrl = resolveBaseUrl(credentials.baseUrl);
 				const spec = buildRequestSpec(operation, (name, fallback) =>
 					this.getNodeParameter(name, itemIndex, fallback),
 				);
 				const response = (await this.helpers.httpRequestWithAuthentication.call(
 					this,
 					'veraApi',
-					toHttpOptions(spec),
+					toHttpOptions(spec, baseUrl),
 				)) as IN8nHttpFullResponse;
 
 				if (!isSuccess(response)) {

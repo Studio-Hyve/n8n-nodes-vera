@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	buildRequestSpec,
+	resolveBaseUrl,
 	toHttpOptions,
 	VeraInputError,
 	type VeraOperation,
@@ -322,7 +323,7 @@ describe('toHttpOptions', () => {
 		const options = toHttpOptions(build('scrape', { url: 'https://example.com' }));
 		expect(options).toMatchObject({
 			method: 'POST',
-			url: 'https://vera.waggle.ae/api/vera/v1/scrape',
+			url: 'https://vera.waggle.ae/v1/scrape',
 			json: true,
 			returnFullResponse: true,
 			ignoreHttpStatusErrors: true,
@@ -338,5 +339,345 @@ describe('toHttpOptions', () => {
 
 	it('rejects an unknown operation', () => {
 		expect(() => build('nope' as VeraOperation, {})).toThrow(/Unknown operation/);
+	});
+});
+
+describe('SERP request (Get Results Page)', () => {
+	it('posts the engine in the path, with the query as q and the depth', () => {
+		expect(build('serpSearch', { query: ' best coffee in dubai ' })).toEqual({
+			path: '/serp/google',
+			body: { q: 'best coffee in dubai', depth: 10 },
+			timeoutMs: 50_000,
+		});
+	});
+
+	it.each(['google', 'bing', 'duckduckgo', 'brave', 'yahoo'])('accepts the engine %s', (engine) => {
+		expect(build('serpSearch', { query: 'q', engine }).path).toBe(`/serp/${engine}`);
+	});
+
+	it.each(['ask', 'Google', '../usage', 'google/../../x', ''])(
+		'rejects the engine %j before any request, so nothing odd reaches the URL path',
+		(engine) => {
+			expect(() => build('serpSearch', { query: 'q', engine })).toThrow(/Unknown search engine/);
+		},
+	);
+
+	it('maps Country, Language and Location to gl, hl and location, lower-casing the codes', () => {
+		const { body } = build('serpSearch', {
+			query: 'coffee shop',
+			depth: 20,
+			options: { country: 'AE', language: 'EN', location: ' Dubai ', fresh: true },
+		});
+		expect(body).toEqual({
+			q: 'coffee shop',
+			depth: 20,
+			gl: 'ae',
+			hl: 'en',
+			location: 'Dubai',
+			fresh: true,
+		});
+	});
+
+	it('accepts a regional language code such as pt-br or zh-hans-cn', () => {
+		expect(build('serpSearch', { query: 'q', options: { language: 'pt-br' } }).body.hl).toBe(
+			'pt-br',
+		);
+		expect(
+			build('aiAnswers', { prompt: 'p', brand: 'b', options: { language: 'zh-hans-cn' } }).body
+				.language,
+		).toBe('zh-hans-cn');
+	});
+
+	it('sends the default features plus each add-on, once, only when an add-on is chosen', () => {
+		expect(
+			build('serpSearch', { query: 'q', addOns: ['local_pack', 'shopping', 'local_pack'] }).body
+				.features,
+		).toEqual(['organic', 'paa', 'ai_overview', 'local_pack', 'shopping']);
+		expect(build('serpSearch', { query: 'q', addOns: [] }).body).not.toHaveProperty('features');
+	});
+
+	it('refuses add-ons on an engine other than Google', () => {
+		expect(() => build('serpSearch', { query: 'q', engine: 'bing', addOns: ['shopping'] })).toThrow(
+			/Google add-ons/,
+		);
+	});
+
+	it('rejects an unknown add-on', () => {
+		expect(() => build('serpSearch', { query: 'q', addOns: ['maps'] })).toThrow(/Unknown add-on/);
+	});
+
+	it.each([0, 101, 2.5, -1])('rejects Depth %s', (depth) => {
+		expect(() => build('serpSearch', { query: 'q', depth })).toThrow(/Depth must be/);
+	});
+
+	it('accepts the depths 1 and 100', () => {
+		expect(build('serpSearch', { query: 'q', depth: 1 }).body.depth).toBe(1);
+		expect(build('serpSearch', { query: 'q', depth: 100 }).body.depth).toBe(100);
+	});
+
+	it('rejects an empty or overlong query and bad market codes', () => {
+		expect(() => build('serpSearch', { query: '  ' })).toThrow(/Query is required/);
+		expect(() => build('serpSearch', { query: 'a'.repeat(501) })).toThrow(/Query is not valid/);
+		expect(() => build('serpSearch', { query: 'q', options: { country: 'usa' } })).toThrow(
+			/Country/,
+		);
+		expect(() => build('serpSearch', { query: 'q', options: { language: 'e' } })).toThrow(
+			/Language/,
+		);
+	});
+});
+
+describe('Keyword ideas request', () => {
+	it('sends the seed, the limit and the expansion, always, so the price does not depend on a default', () => {
+		expect(build('keywordIdeas', { seed: ' specialty coffee ' })).toEqual({
+			path: '/keywords/ideas',
+			body: { seed: 'specialty coffee', limit: 50, expand: 'questions' },
+			timeoutMs: 80_000,
+		});
+	});
+
+	it('maps the options', () => {
+		expect(
+			build('keywordIdeas', {
+				seed: 'قهوة مختصة',
+				limit: 200,
+				expand: 'all',
+				options: { country: 'ae', language: 'ar', location: 'Dubai', fresh: true },
+			}).body,
+		).toEqual({
+			seed: 'قهوة مختصة',
+			limit: 200,
+			expand: 'all',
+			gl: 'ae',
+			hl: 'ar',
+			location: 'Dubai',
+			fresh: true,
+		});
+	});
+
+	it.each(['none', 'questions', 'alphabet', 'all'])('accepts the expansion %s', (expand) => {
+		expect(build('keywordIdeas', { seed: 's', expand }).body.expand).toBe(expand);
+	});
+
+	it('rejects a missing seed, an unknown expansion and an out-of-range limit', () => {
+		expect(() => build('keywordIdeas', { seed: '' })).toThrow(/Seed is required/);
+		expect(() => build('keywordIdeas', { seed: 's', expand: 'everything' })).toThrow(
+			/Unknown expansion/,
+		);
+		for (const limit of [0, 201, 1.5]) {
+			expect(() => build('keywordIdeas', { seed: 's', limit })).toThrow(/Limit must be/);
+		}
+	});
+});
+
+describe('AI answers request', () => {
+	const base = { prompt: 'What are the best coffee roasters in Dubai?', brand: 'Roasters' };
+
+	it('asks one assistant once unless told otherwise, never leaving the engines out', () => {
+		expect(build('aiAnswers', base)).toEqual({
+			path: '/ai/answers',
+			body: { ...base, engines: ['chatgpt'], samples: 1 },
+			timeoutMs: 175_000,
+		});
+	});
+
+	it('maps every field', () => {
+		const { body } = build('aiAnswers', {
+			...base,
+			brandDomain: ' roasters.ae ',
+			competitors: 'Other Roasters, rivals.ae,\nother roasters, ',
+			engines: ['chatgpt', 'Claude', 'gemini', 'claude'],
+			samples: 3,
+			options: { country: 'AE', language: 'ar', city: 'Dubai' },
+		});
+		expect(body).toEqual({
+			...base,
+			brand_domain: 'roasters.ae',
+			competitors: ['Other Roasters', 'rivals.ae'],
+			engines: ['chatgpt', 'claude', 'gemini'],
+			samples: 3,
+			country: 'ae',
+			language: 'ar',
+			city: 'Dubai',
+		});
+	});
+
+	it('refuses an empty engine list, which the API would read as "every assistant"', () => {
+		expect(() => build('aiAnswers', { ...base, engines: [] })).toThrow(
+			/Choose at least one AI assistant/,
+		);
+	});
+
+	it('refuses an unknown assistant, and accepts Perplexity as the API names it', () => {
+		expect(() => build('aiAnswers', { ...base, engines: ['bard'] })).toThrow(
+			/Unknown AI assistant/,
+		);
+		expect(build('aiAnswers', { ...base, engines: ['perplexity'] }).body.engines).toEqual([
+			'perplexity',
+		]);
+	});
+
+	it.each([0, 6, 1.5])('rejects Samples = %s', (samples) => {
+		expect(() => build('aiAnswers', { ...base, samples })).toThrow(/Samples must be/);
+	});
+
+	it('requires the question and the brand, within their limits', () => {
+		expect(() => build('aiAnswers', { brand: 'B' })).toThrow(/Question is required/);
+		expect(() => build('aiAnswers', { prompt: 'p' })).toThrow(/Brand is required/);
+		expect(() => build('aiAnswers', { ...base, prompt: 'a'.repeat(1001) })).toThrow(
+			/Question is not valid/,
+		);
+		expect(() => build('aiAnswers', { ...base, brand: 'b'.repeat(201) })).toThrow(
+			/Brand is not valid/,
+		);
+	});
+
+	it('limits the competitors to 20 names of 200 characters', () => {
+		const twentyOne = Array.from({ length: 21 }, (_, index) => `rival ${index}`).join(',');
+		expect(() => build('aiAnswers', { ...base, competitors: twentyOne })).toThrow(
+			/competitor names/,
+		);
+		expect(() => build('aiAnswers', { ...base, competitors: 'c'.repeat(201) })).toThrow(
+			/competitor names/,
+		);
+		const twenty = Array.from({ length: 20 }, (_, index) => `rival ${index}`).join(',');
+		expect(build('aiAnswers', { ...base, competitors: twenty }).body.competitors).toHaveLength(20);
+	});
+
+	it('omits the optional fields when they are empty', () => {
+		const { body } = build('aiAnswers', { ...base, brandDomain: '', competitors: '', options: {} });
+		expect(body).not.toHaveProperty('brand_domain');
+		expect(body).not.toHaveProperty('competitors');
+		expect(body).not.toHaveProperty('city');
+	});
+});
+
+describe('GEO query radar request', () => {
+	it('sends the query and the depth, with the brand and domain when given', () => {
+		expect(
+			build('geoQueryRadar', {
+				query: 'best specialty coffee roasters in dubai',
+				brand: 'Roasters',
+				domain: 'roasters.ae',
+				depth: 30,
+				options: { location: 'Dubai', country: 'ae', language: 'en', fresh: true },
+			}),
+		).toEqual({
+			path: '/geo/radar/query',
+			body: {
+				query: 'best specialty coffee roasters in dubai',
+				brand: 'Roasters',
+				domain: 'roasters.ae',
+				depth: 30,
+				location: 'Dubai',
+				gl: 'ae',
+				hl: 'en',
+				fresh: true,
+			},
+			timeoutMs: 80_000,
+		});
+	});
+
+	it('defaults to depth 30 and leaves the brand out when empty', () => {
+		expect(build('geoQueryRadar', { query: 'q' }).body).toEqual({ query: 'q', depth: 30 });
+	});
+
+	it('rejects a missing query and a depth outside 1 to 100', () => {
+		expect(() => build('geoQueryRadar', { query: '' })).toThrow(/Query is required/);
+		for (const depth of [0, 101]) {
+			expect(() => build('geoQueryRadar', { query: 'q', depth })).toThrow(/Depth must be/);
+		}
+	});
+});
+
+describe('Company footprint request', () => {
+	it('sends the company, the domain and the depth', () => {
+		expect(
+			build('companyFootprint', {
+				company: ' Roasters ',
+				domain: 'roasters.ae',
+				options: { location: 'Dubai', country: 'ae', language: 'en' },
+			}),
+		).toEqual({
+			path: '/company/footprint',
+			body: {
+				company: 'Roasters',
+				domain: 'roasters.ae',
+				depth: 20,
+				location: 'Dubai',
+				gl: 'ae',
+				hl: 'en',
+			},
+			timeoutMs: 65_000,
+		});
+	});
+
+	it('rejects a missing company and a depth outside 1 to 100', () => {
+		expect(() => build('companyFootprint', { company: ' ' })).toThrow(/Company is required/);
+		expect(() => build('companyFootprint', { company: 'c', depth: 101 })).toThrow(/Depth must be/);
+	});
+});
+
+describe('timeouts', () => {
+	it('gives the long-running search tools time to finish, AI answers the longest', () => {
+		const timeout = (operation: VeraOperation, params: Params) =>
+			toHttpOptions(build(operation, params)).timeout;
+		expect(timeout('serpSearch', { query: 'q' })).toBe(50_000);
+		expect(timeout('keywordIdeas', { seed: 's' })).toBe(80_000);
+		expect(timeout('geoQueryRadar', { query: 'q' })).toBe(80_000);
+		expect(timeout('companyFootprint', { company: 'c' })).toBe(65_000);
+		// The API takes up to 150 s for AI answers, after a few seconds to price the call.
+		expect(timeout('aiAnswers', { prompt: 'p', brand: 'b' })).toBe(175_000);
+		expect(timeout('aiAnswers', { prompt: 'p', brand: 'b' })).toBeGreaterThan(150_000);
+	});
+
+	it('leaves page and search calls on the 60 second default', () => {
+		expect(toHttpOptions(build('webSearch', { query: 'q' })).timeout).toBe(60_000);
+		expect(toHttpOptions(build('scrape', { url: 'https://example.com' })).timeout).toBe(60_000);
+	});
+});
+
+describe('idempotency key on the search tools', () => {
+	it('is sent as a header, not in the body', () => {
+		const spec = build('aiAnswers', {
+			prompt: 'p',
+			brand: 'b',
+			options: { idempotencyKey: retryToken('report-2026-01-01-answer-0001') },
+		});
+		expect(spec.body).not.toHaveProperty('idempotencyKey');
+		expect(toHttpOptions(spec).headers).toMatchObject({
+			'Idempotency-Key': retryToken('report-2026-01-01-answer-0001'),
+		});
+	});
+});
+
+describe('resolveBaseUrl', () => {
+	it('is the production API when the credential has none', () => {
+		expect(resolveBaseUrl(undefined)).toBe('https://vera.waggle.ae/v1');
+		expect(resolveBaseUrl('   ')).toBe('https://vera.waggle.ae/v1');
+	});
+
+	it('keeps a configured https address, without a trailing slash', () => {
+		expect(resolveBaseUrl(' https://staging.vera.example/v1/ ')).toBe(
+			'https://staging.vera.example/v1',
+		);
+	});
+
+	it('lets requests go to the configured address', () => {
+		const options = toHttpOptions(
+			build('serpSearch', { query: 'q' }),
+			resolveBaseUrl('https://staging.vera.example/v1'),
+		);
+		expect(options.url).toBe('https://staging.vera.example/v1/serp/google');
+	});
+
+	it('accepts plain http only for a local development server', () => {
+		expect(resolveBaseUrl('http://localhost:8000/v1')).toBe('http://localhost:8000/v1');
+		expect(resolveBaseUrl('http://127.0.0.1:8000')).toBe('http://127.0.0.1:8000');
+		expect(() => resolveBaseUrl('http://vera.example/v1')).toThrow(/must use https/);
+	});
+
+	it.each(['not a url', 'ftp://vera.example', '//vera.example/v1'])('rejects %j', (value) => {
+		expect(() => resolveBaseUrl(value)).toThrow(VeraInputError);
 	});
 });

@@ -120,10 +120,31 @@ describe('mapApiError', () => {
 				'x-waggle-request-id': 'req_42',
 			}),
 		);
-		expect(info.message).toBe('Vera could not complete the request');
+		expect(info.message).toBe('Invalid input');
+		expect(info.description).toContain('This page is disallowed by robots.txt.');
 		expect(info.code).toBe('robots_disallowed');
 		expect(info.requestId).toBe('req_42');
 		expect(info.creditsUsed).toBe(0);
+	});
+
+	it('402: out of credits, with the pricing link, for the search tools too', () => {
+		const info = mapApiError(
+			failure(402, message('This request requires 200 credits.'), { 'x-waggle-credits-used': '0' }),
+		);
+		expect(info.message).toBe('Not enough Vera credits');
+		expect(info.description).toContain('This request requires 200 credits.');
+		expect(info.description).toContain(
+			'Add credits or choose a plan at https://vera.waggle.ae/pricing.',
+		);
+		expect(info.description).toContain('No credits were charged.');
+	});
+
+	it('400: a request the tool could not price is invalid input, with the message', () => {
+		const info = mapApiError(
+			failure(400, message('depth: Input should be less than or equal to 100')),
+		);
+		expect(info.message).toBe('Invalid input');
+		expect(info.description).toContain('depth: Input should be less than or equal to 100');
 	});
 
 	it('422: validation messages without a code', () => {
@@ -176,6 +197,54 @@ describe('mapApiError', () => {
 		);
 		expect(info.message).toBe('Vera is temporarily unavailable');
 		if (status === 502) expect(info.code).toBe('fetch_failed');
+	});
+
+	it('503: temporarily unavailable and not charged, with the wait to retry', () => {
+		const info = mapApiError(
+			failure(
+				503,
+				message(
+					'This tool is temporarily unavailable. You were not charged. Please try again in a moment.',
+				),
+				{ 'retry-after': '30', 'x-waggle-credits-used': '0' },
+			),
+		);
+		expect(info.message).toBe('Vera is temporarily unavailable');
+		expect(info.description).toContain('Try again in 30 seconds.');
+		expect(info.description).toContain('No credits were charged.');
+		expect(info.retryAfterSeconds).toBe(30);
+	});
+
+	it('503 and 504 are documented as not charged even when no header says so', () => {
+		expect(mapApiError(failure(503, message('x'))).description).toContain(
+			'No credits were charged.',
+		);
+		expect(mapApiError(failure(504, message('x'))).description).toContain(
+			'No credits were charged.',
+		);
+	});
+
+	it('503 and 504 do not claim "not charged" when the header shows a charge', () => {
+		for (const status of [503, 504]) {
+			expect(
+				mapApiError(failure(status, message('x'), { 'x-waggle-credits-used': '3' })).description,
+			).not.toContain('No credits were charged.');
+		}
+	});
+
+	it('504: a timeout, not charged, with advice to ask for less', () => {
+		const info = mapApiError(
+			failure(
+				504,
+				message('The service behind this tool took too long to answer. You were not charged.'),
+				{ 'x-waggle-credits-used': '0' },
+			),
+		);
+		expect(info.message).toBe('Vera timed out');
+		expect(info.description).toContain('took too long');
+		expect(info.description).toContain('a smaller Depth, fewer Samples or one assistant');
+		expect(info.description).toContain('No credits were charged.');
+		expect(info.httpCode).toBe(504);
 	});
 
 	it('500: internal error', () => {

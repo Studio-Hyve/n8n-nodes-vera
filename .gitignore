@@ -1,2 +1,16 @@
-dist
 node_modules
+dist
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+.npmrc.local
+
+# Tool caches and logs
+.DS_Store
+*.log
+*.tsbuildinfo
+.eslintcache
+coverage
+.vitest-cache

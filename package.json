@@ -1,7 +1,7 @@
 {
 	"name": "n8n-nodes-vera",
 	"version": "0.1.0",
-	"description": "n8n community node for Vera by Waggle: scrape pages to Markdown, search the web, news and video, and extract contacts and products.",
+	"description": "n8n community node for Vera by Waggle: scrape pages to Markdown, search the web, news and video, extract contacts and products, and read search results pages, keyword ideas, AI answers, GEO radar and company footprints.",
 	"license": "MIT",
 	"homepage": "https://vera.waggle.ae/docs",
 	"keywords": [
@@ -13,7 +13,12 @@
 		"web search",
 		"markdown",
 		"contacts",
-		"products"
+		"products",
+		"serp",
+		"seo",
+		"geo",
+		"keyword research",
+		"ai search"
 	],
 	"author": {
 		"name": "Waggle",
@@ -22,10 +27,10 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/OWNER/n8n-nodes-vera.git"
+		"url": "git+https://github.com/Studio-Hyve/n8n-nodes-vera.git"
 	},
 	"bugs": {
-		"url": "https://github.com/OWNER/n8n-nodes-vera/issues"
+		"url": "https://github.com/Studio-Hyve/n8n-nodes-vera/issues"
 	},
 	"scripts": {
 		"build": "n8n-node build",

@@ -23,6 +23,12 @@ describe('package.json', () => {
 		expect(pkg.n8n.credentials).toEqual(['dist/credentials/VeraApi.credentials.js']);
 	});
 
+	it('points at the Studio-Hyve repository, which npm provenance checks against the workflow', () => {
+		expect(pkg.repository.url).toBe('git+https://github.com/Studio-Hyve/n8n-nodes-vera.git');
+		expect(pkg.bugs.url).toBe('https://github.com/Studio-Hyve/n8n-nodes-vera/issues');
+		expect(JSON.stringify(pkg)).not.toContain('OWNER');
+	});
+
 	it('names the author contact and a public homepage', () => {
 		expect(pkg.author.email).toBe('contact@waggle.ae');
 		expect(pkg.homepage).toBe('https://vera.waggle.ae/docs');
@@ -43,12 +49,23 @@ describe('Vera API credential', () => {
 		});
 	});
 
-	it('tests the key against GET /usage, which costs no credits', () => {
+	it('tests the key against GET /usage, which costs no credits, at the configured Base URL', () => {
 		expect(credential.test.request).toEqual({
-			baseURL: 'https://vera.waggle.ae/api/vera/v1',
+			baseURL: '={{$credentials.baseUrl}}',
 			url: '/usage',
 			method: 'GET',
 		});
+	});
+
+	it('has a Base URL field that defaults to the direct API, not the website proxy', () => {
+		const baseUrl = credential.properties.find((property) => property.name === 'baseUrl');
+		expect(baseUrl).toMatchObject({ type: 'string', default: 'https://vera.waggle.ae/v1' });
+		expect(baseUrl?.typeOptions).toBeUndefined();
+		expect(JSON.stringify(credential.properties)).not.toMatch(/api\/vera/);
+	});
+
+	it('does not promise a number of free credits that may change', () => {
+		expect(JSON.stringify(credential.properties)).not.toMatch(/\d,\d{3}/);
 	});
 });
 
@@ -65,11 +82,16 @@ describe('Vera node description', () => {
 			}>,
 	);
 
-	it('offers the six operations, each with its credit cost in the description', () => {
+	it('offers the eleven operations, each with its cost in the description', () => {
 		expect(options.map((option) => option.name).sort()).toEqual([
+			'Check Brand in AI Answers',
 			'Extract Contacts',
 			'Extract Products',
+			'Get Ideas',
+			'Get Results Page',
+			'Get Search Footprint',
 			'News Search',
+			'Run Query Radar',
 			'Scrape Page',
 			'Video Search',
 			'Web Search',
@@ -81,7 +103,52 @@ describe('Vera node description', () => {
 		expect(cost.webSearch).toMatch(/Costs 3 credits/);
 		expect(cost.newsSearch).toMatch(/Costs 3 credits/);
 		expect(cost.videoSearch).toMatch(/Costs 3 credits/);
+		for (const value of [
+			'serpSearch',
+			'keywordIdeas',
+			'aiAnswers',
+			'geoQueryRadar',
+			'companyFootprint',
+		]) {
+			expect(cost[value]).toMatch(/Priced by what comes back/);
+			expect(cost[value]).toMatch(/A failed call is not charged/);
+		}
 		for (const option of options) expect(option.action).toBeTruthy();
+	});
+
+	it('lists one resource per area, each with its own operation', () => {
+		const resource = description.properties.find((property) => property.name === 'resource');
+		const values = ((resource?.options ?? []) as Array<{ value: string }>).map(
+			(option) => option.value,
+		);
+		expect(values).toEqual([
+			'aiAnswers',
+			'company',
+			'geoRadar',
+			'keyword',
+			'page',
+			'search',
+			'serp',
+		]);
+		for (const value of values) {
+			const shown = operations.filter((property) =>
+				(property.displayOptions?.show?.resource as string[] | undefined)?.includes(value),
+			);
+			expect(shown, `operation list of ${value}`).toHaveLength(1);
+		}
+	});
+
+	it('offers ChatGPT, Claude and Gemini, with ChatGPT alone chosen so that nothing expensive runs by default', () => {
+		const engines = description.properties.find((property) => property.name === 'engines');
+		expect(engines?.default).toEqual(['chatgpt']);
+		expect(
+			((engines?.options ?? []) as Array<{ value: string }>).map((option) => option.value),
+		).toEqual(['chatgpt', 'claude', 'gemini']);
+	});
+
+	it('defaults Samples to one', () => {
+		const samples = description.properties.find((property) => property.name === 'samples');
+		expect(samples?.default).toBe(1);
 	});
 
 	it('requires the Vera API credential and can be used as an AI tool', () => {

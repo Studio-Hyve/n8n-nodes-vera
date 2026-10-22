@@ -1,12 +1,24 @@
 import type { IDataObject, IHttpRequestOptions, IN8nHttpFullResponse } from 'n8n-workflow';
 
 import {
+	AI_ENGINES,
+	AI_LIMITS,
 	CREDITS_HEADER,
+	DEPTH_MAX,
+	KEYWORD_EXPANSIONS,
+	KEYWORD_MAX_LIMIT,
 	MAX_EXTRACT_FIELDS,
+	MAX_TEXT,
+	PRICING_URL,
 	REQUEST_ID_HEADER,
 	REQUEST_TIMEOUT_MS,
 	RETRY_AFTER_HEADER,
 	SEARCH_MAX_RESULTS,
+	SERP_ADD_ONS,
+	SERP_DEFAULT_FEATURES,
+	SERP_ENGINES,
+	SERP_MAX_DEPTH,
+	TOOL_TIMEOUT_MS,
 	VERA_BASE_URL,
 } from './constants';
 
@@ -16,16 +28,25 @@ export type VeraOperation =
 	| 'extractProducts'
 	| 'webSearch'
 	| 'newsSearch'
-	| 'videoSearch';
+	| 'videoSearch'
+	| 'serpSearch'
+	| 'keywordIdeas'
+	| 'aiAnswers'
+	| 'geoQueryRadar'
+	| 'companyFootprint';
 
 /** Reads one node parameter for the current item. */
 export type ParamGetter = (name: string, fallback?: unknown) => unknown;
 
-/** What buildRequestSpec produces: the endpoint, JSON body and optional retry-protection key. */
+/**
+ * What buildRequestSpec produces: the endpoint, JSON body, optional retry-protection key and, for the
+ * long-running search tools, how long the node waits for an answer.
+ */
 export interface RequestSpec {
 	path: string;
 	body: IDataObject;
 	idempotencyKey?: string;
+	timeoutMs?: number;
 }
 
 /** A parameter the user set cannot be sent as it is. Raised before any request, so nothing is charged. */
@@ -50,6 +71,8 @@ export class VeraApiError extends Error {
 	}
 }
 
+// A results page names its engine in the path (/serp/{engine}); buildSerp fills that in from a fixed
+// list, so nothing the user types ever reaches a URL path.
 const PATHS: Record<VeraOperation, string> = {
 	scrape: '/scrape',
 	extractContacts: '/contacts',
@@ -57,6 +80,11 @@ const PATHS: Record<VeraOperation, string> = {
 	webSearch: '/search',
 	newsSearch: '/search/news',
 	videoSearch: '/search/videos',
+	serpSearch: '/serp',
+	keywordIdeas: '/keywords/ideas',
+	aiAnswers: '/ai/answers',
+	geoQueryRadar: '/geo/radar/query',
+	companyFootprint: '/company/footprint',
 };
 
 // The API's own rules for a custom extraction rule (ExtractionRule and ScrapePayload), mirrored so
@@ -67,6 +95,8 @@ const SIMPLE_SELECTOR =
 	/^(?:[A-Za-z][A-Za-z0-9_-]*|\*)?(?:(?:[.#][A-Za-z_][A-Za-z0-9_-]*)|(?:\[[A-Za-z_][A-Za-z0-9_-]*(?:=(?:"[^"\\\]]*"|'[^'\\\]]*'|[A-Za-z0-9_-]+))?\]))*$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{16,128}$/;
 const TWO_LETTERS = /^[a-z]{2}$/;
+// The search tools lower-case these themselves, so they are accepted in any case here.
+const LANGUAGE_CODE = /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/;
 
 /** True when the text holds a control character (code below 32, or DEL). */
 function hasControlCharacters(value: string): boolean {
@@ -250,12 +280,278 @@ function buildSearch(get: ParamGetter, options: IDataObject): IDataObject {
 	return body;
 }
 
+// --- The search tools: results pages, keyword ideas, AI answers, query radar, company footprint ---
+//
+// These routes take any JSON object and the search service checks every field, so the checks below
+// only catch what is certain (a missing required field, a number out of range, an unknown choice) and
+// save a round trip. A 422 from the service is never charged either way.
+
+function optionalText(value: unknown, label: string, max: number): string | undefined {
+	const cleaned = text(value);
+	if (!cleaned) return undefined;
+	if (cleaned.length > max || hasControlCharacters(cleaned)) {
+		throw new VeraInputError(
+			`${label} is not valid`,
+			`Use at most ${max} characters and no control characters.`,
+		);
+	}
+	return cleaned;
+}
+
+function requiredText(value: unknown, label: string, max: number, hint: string): string {
+	const cleaned = optionalText(value, label, max);
+	if (!cleaned) throw new VeraInputError(`${label} is required`, hint);
+	return cleaned;
+}
+
+function wholeNumber(
+	value: unknown,
+	label: string,
+	min: number,
+	max: number,
+	hint?: string,
+): number {
+	if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+		throw new VeraInputError(`${label} must be a whole number from ${min} to ${max}`, hint);
+	}
+	return value;
+}
+
+/** Country, language and place, shared by the five search tools. Country and language are optional. */
+function addMarket(
+	body: IDataObject,
+	options: IDataObject,
+	names: { country: string; language: string },
+): void {
+	const country = text(options.country).toLowerCase();
+	if (country) {
+		if (!TWO_LETTERS.test(country)) {
+			throw new VeraInputError('Country must be two letters', 'For example us, gb or ae.');
+		}
+		body[names.country] = country;
+	}
+	const language = text(options.language).toLowerCase();
+	if (language) {
+		if (!LANGUAGE_CODE.test(language)) {
+			throw new VeraInputError('Language must be a language code', 'For example en, ar or pt-br.');
+		}
+		body[names.language] = language;
+	}
+}
+
+function addLocation(body: IDataObject, options: IDataObject): void {
+	const location = optionalText(options.location, 'Location', MAX_TEXT.location);
+	if (location) body.location = location;
+}
+
+function addFresh(body: IDataObject, options: IDataObject): void {
+	if (options.fresh === true) body.fresh = true;
+}
+
+function buildSerp(get: ParamGetter, options: IDataObject): { path: string; body: IDataObject } {
+	const engine = text(get('engine', 'google'));
+	if (!(SERP_ENGINES as readonly string[]).includes(engine)) {
+		throw new VeraInputError(
+			`Unknown search engine "${engine}"`,
+			`Choose one of: ${SERP_ENGINES.join(', ')}.`,
+		);
+	}
+	const body: IDataObject = {
+		q: requiredText(get('query', ''), 'Query', MAX_TEXT.query, 'Enter what to search for.'),
+		depth: wholeNumber(
+			get('depth', 10),
+			'Depth',
+			1,
+			SERP_MAX_DEPTH,
+			'Each ten results is one results page, so a larger depth costs more.',
+		),
+	};
+	addMarket(body, options, { country: 'gl', language: 'hl' });
+	addLocation(body, options);
+	addFresh(body, options);
+
+	const addOns = (get('addOns', []) as string[] | undefined) ?? [];
+	const unknown = addOns.find((addOn) => !(SERP_ADD_ONS as readonly string[]).includes(addOn));
+	if (unknown !== undefined) {
+		throw new VeraInputError(
+			`Unknown add-on "${unknown}"`,
+			`Choose from: ${SERP_ADD_ONS.join(', ')}.`,
+		);
+	}
+	if (addOns.length > 0) {
+		if (engine !== 'google') {
+			throw new VeraInputError(
+				'Local Pack and Shopping are Google add-ons',
+				'Choose Google as the engine, or turn the add-ons off.',
+			);
+		}
+		body.features = [...SERP_DEFAULT_FEATURES, ...new Set(addOns)];
+	}
+	return { path: `${PATHS.serpSearch}/${engine}`, body };
+}
+
+function buildKeywordIdeas(get: ParamGetter, options: IDataObject): IDataObject {
+	const expand = text(get('expand', 'questions'));
+	if (!(KEYWORD_EXPANSIONS as readonly string[]).includes(expand)) {
+		throw new VeraInputError(
+			`Unknown expansion "${expand}"`,
+			`Choose one of: ${KEYWORD_EXPANSIONS.join(', ')}.`,
+		);
+	}
+	const body: IDataObject = {
+		seed: requiredText(
+			get('seed', ''),
+			'Seed',
+			200,
+			'Enter the keyword to find ideas for, at most 200 characters.',
+		),
+		limit: wholeNumber(get('limit', 50), 'Limit', 1, KEYWORD_MAX_LIMIT),
+		expand,
+	};
+	addMarket(body, options, { country: 'gl', language: 'hl' });
+	addLocation(body, options);
+	addFresh(body, options);
+	return body;
+}
+
+/** The names to look for besides the brand: one per line or comma, each once, in the order typed. */
+export function parseCompetitors(value: unknown): string[] {
+	const seen = new Set<string>();
+	const names: string[] = [];
+	for (const part of text(value).split(/[\n,،]+/)) {
+		const name = part.trim();
+		if (name && !seen.has(name.toLowerCase())) {
+			seen.add(name.toLowerCase());
+			names.push(name);
+		}
+	}
+	return names;
+}
+
+function buildAiAnswers(get: ParamGetter, options: IDataObject): IDataObject {
+	const engines = ((get('engines', ['chatgpt']) as string[] | undefined) ?? []).map((engine) =>
+		String(engine).toLowerCase(),
+	);
+	if (engines.length === 0) {
+		throw new VeraInputError(
+			'Choose at least one AI assistant',
+			'Leaving the list empty would ask every assistant, which is the most expensive way to run this.',
+		);
+	}
+	const unknown = engines.find((engine) => !(AI_ENGINES as readonly string[]).includes(engine));
+	if (unknown !== undefined) {
+		throw new VeraInputError(
+			`Unknown AI assistant "${unknown}"`,
+			`Choose from: ${AI_ENGINES.join(', ')}.`,
+		);
+	}
+	const body: IDataObject = {
+		prompt: requiredText(
+			get('prompt', ''),
+			'Question',
+			AI_LIMITS.prompt,
+			'Enter the question a buyer would ask the assistant.',
+		),
+		brand: requiredText(
+			get('brand', ''),
+			'Brand',
+			AI_LIMITS.brand,
+			'Enter the brand name to look for in the answers.',
+		),
+		engines: [...new Set(engines)],
+		samples: wholeNumber(
+			get('samples', 1),
+			'Samples',
+			1,
+			AI_LIMITS.samples,
+			'Each sample is a separate paid call to the assistant.',
+		),
+	};
+	const brandDomain = optionalText(get('brandDomain', ''), 'Brand Domain', 253);
+	if (brandDomain) body.brand_domain = brandDomain;
+	const competitors = parseCompetitors(get('competitors', ''));
+	if (
+		competitors.length > AI_LIMITS.competitors ||
+		competitors.some((name) => name.length > AI_LIMITS.competitor)
+	) {
+		throw new VeraInputError(
+			'Too many or too long competitor names',
+			`Use up to ${AI_LIMITS.competitors} competitors of at most ${AI_LIMITS.competitor} characters each.`,
+		);
+	}
+	if (competitors.length > 0) body.competitors = competitors;
+	addMarket(body, options, { country: 'country', language: 'language' });
+	const city = optionalText(options.city, 'City', AI_LIMITS.city);
+	if (city) body.city = city;
+	return body;
+}
+
+function buildGeoQueryRadar(get: ParamGetter, options: IDataObject): IDataObject {
+	const body: IDataObject = {
+		query: requiredText(
+			get('query', ''),
+			'Query',
+			MAX_TEXT.query,
+			'Enter the topic query to look at, such as "best coffee roasters in dubai".',
+		),
+		depth: wholeNumber(
+			get('depth', 30),
+			'Depth',
+			1,
+			DEPTH_MAX,
+			'Depth is how many organic results are read.',
+		),
+	};
+	const brand = optionalText(get('brand', ''), 'Brand', MAX_TEXT.brand);
+	if (brand) body.brand = brand;
+	const domain = optionalText(get('domain', ''), 'Domain', 253);
+	if (domain) body.domain = domain;
+	addMarket(body, options, { country: 'gl', language: 'hl' });
+	addLocation(body, options);
+	addFresh(body, options);
+	return body;
+}
+
+function buildCompanyFootprint(get: ParamGetter, options: IDataObject): IDataObject {
+	const body: IDataObject = {
+		company: requiredText(
+			get('company', ''),
+			'Company',
+			MAX_TEXT.company,
+			'Enter the company or brand name.',
+		),
+		depth: wholeNumber(
+			get('depth', 20),
+			'Depth',
+			1,
+			DEPTH_MAX,
+			'Depth is how many organic results are read.',
+		),
+	};
+	const domain = optionalText(get('domain', ''), 'Domain', 253);
+	if (domain) body.domain = domain;
+	addMarket(body, options, { country: 'gl', language: 'hl' });
+	addLocation(body, options);
+	addFresh(body, options);
+	return body;
+}
+
+/** How long the node waits for each operation. Page and search calls use the default. */
+const TIMEOUTS: Partial<Record<VeraOperation, number>> = {
+	serpSearch: TOOL_TIMEOUT_MS.serp,
+	keywordIdeas: TOOL_TIMEOUT_MS.keywordIdeas,
+	geoQueryRadar: TOOL_TIMEOUT_MS.geoQueryRadar,
+	companyFootprint: TOOL_TIMEOUT_MS.companyFootprint,
+	aiAnswers: TOOL_TIMEOUT_MS.aiAnswers,
+};
+
 /** Turns the node's parameters into the API call, or throws VeraInputError. Pure and unit-tested. */
 export function buildRequestSpec(operation: VeraOperation, get: ParamGetter): RequestSpec {
 	if (!(operation in PATHS)) {
 		throw new VeraInputError(`Unknown operation "${String(operation)}"`);
 	}
 	const options = (get('options', {}) as IDataObject | undefined) ?? {};
+	let path = PATHS[operation];
 	let body: IDataObject;
 	switch (operation) {
 		case 'scrape':
@@ -270,10 +566,27 @@ export function buildRequestSpec(operation: VeraOperation, get: ParamGetter): Re
 			if (marketplace && marketplace !== 'auto') body.marketplace = marketplace as string;
 			break;
 		}
+		case 'serpSearch':
+			({ path, body } = buildSerp(get, options));
+			break;
+		case 'keywordIdeas':
+			body = buildKeywordIdeas(get, options);
+			break;
+		case 'aiAnswers':
+			body = buildAiAnswers(get, options);
+			break;
+		case 'geoQueryRadar':
+			body = buildGeoQueryRadar(get, options);
+			break;
+		case 'companyFootprint':
+			body = buildCompanyFootprint(get, options);
+			break;
 		default:
 			body = buildSearch(get, options);
 	}
-	const spec: RequestSpec = { path: PATHS[operation], body };
+	const spec: RequestSpec = { path, body };
+	const timeoutMs = TIMEOUTS[operation];
+	if (timeoutMs !== undefined) spec.timeoutMs = timeoutMs;
 	const key = text(options.idempotencyKey);
 	if (key) {
 		if (!IDEMPOTENCY_KEY.test(key)) {
@@ -287,11 +600,47 @@ export function buildRequestSpec(operation: VeraOperation, get: ParamGetter): Re
 	return spec;
 }
 
+/**
+ * The API address from the credential's Base URL field, without a trailing slash. An empty field
+ * means the production API. The key goes to this address, so it must be https (plain http only for a
+ * local development server).
+ */
+export function resolveBaseUrl(value: unknown): string {
+	const raw = typeof value === 'string' ? value.trim() : '';
+	if (!raw) return VERA_BASE_URL;
+	const url = parseUrl(raw);
+	if (!url) {
+		throw new VeraInputError(
+			"The credential's Base URL is not a valid address",
+			`Use a full address such as ${VERA_BASE_URL}.`,
+		);
+	}
+	const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+	if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
+		throw new VeraInputError(
+			"The credential's Base URL must use https",
+			'The API key is sent to this address, so only https is accepted (http only for localhost).',
+		);
+	}
+	return raw.replace(/\/+$/, '');
+}
+
+function parseUrl(raw: string): URL | undefined {
+	try {
+		return new URL(raw);
+	} catch {
+		return undefined;
+	}
+}
+
 /** The HTTP request n8n sends. Auth is added by httpRequestWithAuthentication from the credential. */
-export function toHttpOptions(spec: RequestSpec): IHttpRequestOptions {
+export function toHttpOptions(
+	spec: RequestSpec,
+	baseUrl: string = VERA_BASE_URL,
+): IHttpRequestOptions {
 	return {
 		method: 'POST',
-		url: `${VERA_BASE_URL}${spec.path}`,
+		url: `${baseUrl}${spec.path}`,
 		body: spec.body,
 		headers: {
 			Accept: 'application/json',
@@ -300,7 +649,7 @@ export function toHttpOptions(spec: RequestSpec): IHttpRequestOptions {
 		json: true,
 		returnFullResponse: true,
 		ignoreHttpStatusErrors: true,
-		timeout: REQUEST_TIMEOUT_MS,
+		timeout: spec.timeoutMs ?? REQUEST_TIMEOUT_MS,
 	};
 }
 
@@ -400,7 +749,7 @@ export function mapApiError(response: IN8nHttpFullResponse): ApiErrorInfo {
 			break;
 		case 402:
 			message = 'Not enough Vera credits';
-			advice = 'Add credits or choose a plan at https://vera.waggle.ae/pricing.';
+			advice = `Add credits or choose a plan at ${PRICING_URL}.`;
 			break;
 		case 403:
 			message = 'Vera refused the request';
@@ -412,9 +761,11 @@ export function mapApiError(response: IN8nHttpFullResponse): ApiErrorInfo {
 			advice =
 				'This usually means an idempotency key was reused or its request is still running. Use a new key, or wait and retry the same one.';
 			break;
+		case 400:
 		case 422:
-			message = 'Vera could not complete the request';
-			advice = 'Check the parameters and that the page is public and reachable.';
+			message = 'Invalid input';
+			advice =
+				'Check the parameters, and for a page operation that the page is public and reachable.';
 			break;
 		case 429:
 			message = 'Vera rate limit reached';
@@ -426,13 +777,27 @@ export function mapApiError(response: IN8nHttpFullResponse): ApiErrorInfo {
 		case 502:
 		case 503:
 			message = 'Vera is temporarily unavailable';
-			advice = 'Try again shortly.';
+			advice =
+				retryAfterSeconds === undefined
+					? 'Try again shortly.'
+					: `Try again in ${retryAfterSeconds} seconds.`;
+			break;
+		case 504:
+			message = 'Vera timed out';
+			advice =
+				'The service behind this operation took too long to answer. Try again, or ask for less: a smaller Depth, fewer Samples or one assistant.';
 			break;
 		default:
 			message = status >= 500 ? 'Vera had an internal error' : `Vera returned HTTP ${status}`;
 			advice = status >= 500 ? 'Try again shortly.' : '';
 	}
-	const notCharged = creditsUsed === 0 ? 'No credits were charged.' : '';
+	// A refused or failed call is not charged. The header is the proof; a 503 or 504 that carries no
+	// header is still one Vera documents as not charged.
+	const unavailable = status === 503 || status === 504;
+	const notCharged =
+		creditsUsed === 0 || (unavailable && creditsUsed === undefined)
+			? 'No credits were charged.'
+			: '';
 	const useful = status === 422 || status === 502 ? code : undefined;
 	return {
 		message,

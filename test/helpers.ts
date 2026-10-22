@@ -39,6 +39,8 @@ export interface FakeOptions {
 	respond: (options: IHttpRequestOptions, call: number) => IN8nHttpFullResponse | Error;
 	continueOnFail?: boolean;
 	items?: number;
+	/** The Base URL field of the credential. Left out, the credential has none, as a new one does. */
+	baseUrl?: string;
 }
 
 export function fakeContext(options: FakeOptions) {
@@ -62,6 +64,10 @@ export function fakeContext(options: FakeOptions) {
 			if (fallback !== undefined) return fallback;
 			throw new Error(`Could not get parameter "${name}"`);
 		},
+		getCredentials: async () => ({
+			apiKey: 'test-key-not-a-secret',
+			...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+		}),
 		getNode: () => ({
 			id: 'node-1',
 			name: 'Vera',

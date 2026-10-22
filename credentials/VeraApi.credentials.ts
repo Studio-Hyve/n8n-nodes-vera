@@ -6,6 +6,8 @@ import type {
 	INodeProperties,
 } from 'n8n-workflow';
 
+import { VERA_BASE_URL } from '../nodes/Vera/constants';
+
 export class VeraApi implements ICredentialType {
 	name = 'veraApi';
 
@@ -25,7 +27,16 @@ export class VeraApi implements ICredentialType {
 			default: '',
 			placeholder: 'vera_live_...',
 			description:
-				'Create a key under API keys in your Vera workspace. New accounts get 3,000 free credits at https://vera.waggle.ae/signup.',
+				'Create a key under API keys in your Vera workspace. New accounts get free credits when they sign up at https://vera.waggle.ae/signup.',
+		},
+		{
+			displayName: 'Base URL',
+			name: 'baseUrl',
+			type: 'string',
+			default: VERA_BASE_URL,
+			placeholder: VERA_BASE_URL,
+			description:
+				'The Vera API address. Leave it as it is unless you were given a different one, for example for a staging Vera. The key is sent to this address, so it must be https.',
 		},
 	];
 
@@ -41,7 +52,7 @@ export class VeraApi implements ICredentialType {
 	// GET /usage needs a valid key and costs no credits.
 	test: ICredentialTestRequest = {
 		request: {
-			baseURL: 'https://vera.waggle.ae/api/vera/v1',
+			baseURL: '={{$credentials.baseUrl}}',
 			url: '/usage',
 			method: 'GET',
 		},
