@@ -1,70 +1,75 @@
 {
-	"name": "n8n-nodes-vera",
-	"version": "0.1.0",
-	"description": "n8n community node for Vera by Waggle: scrape pages to Markdown, search the web, news and video, extract contacts and products, and read search results pages, keyword ideas, AI answers, GEO radar and company footprints.",
-	"license": "MIT",
-	"homepage": "https://vera.waggle.ae/docs",
-	"keywords": [
-		"n8n-community-node-package",
-		"n8n",
-		"vera",
-		"waggle",
-		"web scraping",
-		"web search",
-		"markdown",
-		"contacts",
-		"products",
-		"serp",
-		"seo",
-		"geo",
-		"keyword research",
-		"ai search"
-	],
-	"author": {
-		"name": "Waggle",
-		"email": "contact@waggle.ae",
-		"url": "https://vera.waggle.ae"
-	},
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/Studio-Hyve/n8n-nodes-vera.git"
-	},
-	"bugs": {
-		"url": "https://github.com/Studio-Hyve/n8n-nodes-vera/issues"
-	},
-	"scripts": {
-		"build": "n8n-node build",
-		"build:watch": "tsc --watch",
-		"dev": "n8n-node dev",
-		"lint": "n8n-node lint",
-		"lint:fix": "n8n-node lint --fix",
-		"test": "vitest run",
-		"typecheck": "tsc -p tsconfig.test.json",
-		"release": "n8n-node release",
-		"prepublishOnly": "n8n-node prerelease"
-	},
-	"files": [
-		"dist"
-	],
-	"n8n": {
-		"n8nNodesApiVersion": 1,
-		"strict": true,
-		"credentials": [
-			"dist/credentials/VeraApi.credentials.js"
-		],
-		"nodes": [
-			"dist/nodes/Vera/Vera.node.js"
-		]
-	},
-	"devDependencies": {
-		"@n8n/node-cli": "*",
-		"eslint": "9.32.0",
-		"prettier": "3.6.2",
-		"release-it": "^21.1.0",
-		"typescript": "5.9.2",
-		"vitest": "^3.2.4"
-	},
-	"peerDependencies": {
-		"n8n-workflow": "*"
-	}
+  "name": "n8n-nodes-vera",
+  "version": "0.1.0",
+  "description": "n8n community node for Vera by Waggle: scrape pages to Markdown, search the web, news and video, extract contacts and products, and read search results pages, keyword ideas, AI answers, GEO radar and company footprints.",
+  "license": "MIT",
+  "homepage": "https://vera.waggle.ae/docs",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "vera",
+    "waggle",
+    "web scraping",
+    "web search",
+    "markdown",
+    "contacts",
+    "products",
+    "serp",
+    "seo",
+    "geo",
+    "keyword research",
+    "ai search"
+  ],
+  "author": {
+    "name": "Waggle",
+    "email": "contact@waggle.ae",
+    "url": "https://vera.waggle.ae"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Studio-Hyve/n8n-nodes-vera.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Studio-Hyve/n8n-nodes-vera/issues"
+  },
+  "scripts": {
+    "build": "n8n-node build",
+    "build:watch": "tsc --watch",
+    "dev": "n8n-node dev",
+    "lint": "n8n-node lint",
+    "lint:fix": "n8n-node lint --fix",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "release": "n8n-node release",
+    "prepublishOnly": "n8n-node prerelease"
+  },
+  "files": [
+    "dist",
+    "!dist/tsconfig.tsbuildinfo"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "strict": true,
+    "credentials": [
+      "dist/credentials/VeraApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/Vera/Vera.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@n8n/node-cli": "*",
+    "eslint": "9.32.0",
+    "prettier": "3.6.2",
+    "release-it": "^21.1.0",
+    "typescript": "5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }
